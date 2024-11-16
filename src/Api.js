@@ -1,52 +1,7 @@
-const API_BASE_URL = "https://testnet.api.euclidprotocol.com/api/v1"; // Replace with actual base URL
-const API_KEY = "your_api_key_here"; // Replace with your actual API key
-
-/**
- * Utility function for making API requests
- * @param {string} endpoint - API endpoint
- * @param {string} method - HTTP method (GET, POST, etc.)
- * @param {object} body - Request payload
- * @returns {Promise<object|null>} - JSON response or null in case of failure
- */
-const apiRequest = async (endpoint, method = "GET", body = null) => {
-    try {
-        const headers = {
-            'Authorization': `Bearer ${API_KEY}`,
-            'Content-Type': 'application/json',
-        };
-
-        const options = {
-            method,
-            headers,
-        };
-
-        if (body) {
-            options.body = JSON.stringify(body);
-        }
-
-        const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
-
-        if (!response.ok) {
-            console.error(`API request failed: ${response.status} ${response.statusText}`);
-            return null;
-        }
-
-        return await response.json();
-    } catch (error) {
-        console.error(`Error during API request to ${endpoint}:`, error);
-        return null;
-    }
-};
+const API_BASE_URL = "https://testnet.api.euclidprotocol.com/api/v1"; // Replace with the actual base URL
 
 /**
  * Add Liquidity to a Pool
- * @param {Object} pairInfo - Information about the token pair (token_1 and token_2).
- * @param {string} token1Liquidity - Amount of liquidity to add for the first token.
- * @param {string} token2Liquidity - Amount of liquidity to add for the second token.
- * @param {number} slippageTolerance - Slippage tolerance in percentage (1-100).
- * @param {string} senderAddress - Address of the sender adding liquidity.
- * @param {string} chainUid - Chain UID of the sender.
- * @returns {Promise<Object|null>} - The response from the API or null in case of an error.
  */
 export const addLiquidity = async ({
     pairInfo,
@@ -78,6 +33,8 @@ export const addLiquidity = async ({
         });
 
         if (!response.ok) {
+            const errorDetails = await response.text();
+            console.error(`Add Liquidity Error: ${errorDetails}`);
             throw new Error(`HTTP error! status: ${response.status}`);
         }
 
@@ -92,14 +49,6 @@ export const addLiquidity = async ({
 
 /**
  * Remove Liquidity from a Pool
- * @param {Object} pair - Information about the token pair.
- * @param {string} lpAllocation - Amount of liquidity pool allocation to remove.
- * @param {string} senderAddress - Address of the sender removing liquidity.
- * @param {string} chainUid - Chain UID of the sender.
- * @param {string} vlpAddress - VLP contract address for the pool.
- * @param {Array<Object>} crossChainAddresses - (Optional) Cross-chain addresses for releasing the asset.
- * @param {number} [timeout=null] - (Optional) Timeout in seconds for the operation (min: 30, max: 240).
- * @returns {Promise<Object|null>} - The response from the API or null in case of an error.
  */
 export const removeLiquidity = async ({
     pair,
@@ -133,6 +82,8 @@ export const removeLiquidity = async ({
         });
 
         if (!response.ok) {
+            const errorDetails = await response.text();
+            console.error(`Remove Liquidity Error: ${errorDetails}`);
             throw new Error(`HTTP error! status: ${response.status}`);
         }
 
@@ -147,13 +98,6 @@ export const removeLiquidity = async ({
 
 /**
  * Simulate a Swap Transaction
- * @param {string} amountIn - The amount of the input asset being swapped in.
- * @param {string} assetIn - The asset ID of the input asset.
- * @param {string} assetOut - The asset ID of the output asset.
- * @param {string} contract - The router contract address for the swap.
- * @param {string} minAmountOut - The minimum amount of the output asset for the swap to be considered successful.
- * @param {Array<string>} swaps - A list of swaps to execute to get from `asset_in` to `asset_out`.
- * @returns {Promise<Object|null>} - The simulated result, including the amount of output asset.
  */
 export const simulateSwap = async ({
     amountIn,
@@ -164,13 +108,20 @@ export const simulateSwap = async ({
     swaps,
 }) => {
     try {
+        // Validate inputs
+        if (typeof assetIn !== 'string' || typeof assetOut !== 'string') {
+            throw new Error(
+                `Invalid asset types. Expected strings but received assetIn: ${typeof assetIn}, assetOut: ${typeof assetOut}`
+            );
+        }
+
         const payload = {
             amount_in: amountIn,
-            asset_in: assetIn,
-            asset_out: assetOut,
-            contract: contract,
+            asset_in: assetIn, // Ensure this is a string
+            asset_out: assetOut, // Ensure this is a string
+            contract,
             min_amount_out: minAmountOut,
-            swaps: swaps,
+            swaps,
         };
 
         const response = await fetch(`${API_BASE_URL}/simulate-swap`, {
@@ -183,14 +134,80 @@ export const simulateSwap = async ({
         });
 
         if (!response.ok) {
+            const errorDetails = await response.json();
+            console.error(`Simulate Swap Error: ${errorDetails}`);
             throw new Error(`HTTP error! status: ${response.status}`);
         }
 
         const data = await response.json();
-        console.log("Simulated Swap Response:", data);
+        console.log("Simulate Swap Response:", data);
+        return data; // Should include amount_out and estimated_gas
+    } catch (error) {
+        console.error("Error simulating swap:", error.message);
+        throw error;
+    }
+};
+
+
+/**
+ * Execute a Swap Transaction
+ */
+export const swapRequest = async ({
+    amount_in,
+    asset_in,
+    asset_out,
+    min_amount_out,
+    sender,
+    swaps,
+    cross_chain_addresses = [],
+    partner_fee = null,
+    timeout = null,
+}) => {
+    try {
+        // Prepare the payload for the swap request with nested `asset_in` and `sender` as JSON objects
+        const payload = {
+            amount_in,
+            asset_in: {
+                token: asset_in.token,
+                token_type: {
+                    smart: {
+                        contract_address: asset_in.contract_address, // Dynamic contract address
+                    },
+                },
+            },
+            asset_out,
+            min_amount_out,
+            sender: {
+                address: sender.address,
+                chain_uid: sender.chain_uid, // The sender's chain UID
+            },
+            swaps,
+            cross_chain_addresses,
+            partner_fee,
+            timeout,
+        };
+
+        // Sending POST request to the swap execution endpoint
+        const response = await fetch(`${API_BASE_URL}/execute/swap`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+            },
+            body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+            const errorDetails = await response.text();
+            console.error(`Swap Execution Error: ${errorDetails}`);
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        console.log("Swap Execution Response:", data);
         return data;
     } catch (error) {
-        console.error("Error simulating swap:", error);
-        return null;
+        console.error("Error executing swap:", error);
+        throw error;
     }
 };
